@@ -6,6 +6,7 @@ export interface AppConfig {
   };
   openai: {
     apiKey: string;
+    model: string;
   };
   database: {
     path: string;
@@ -58,6 +59,7 @@ export default (): AppConfig => ({
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY ?? '',
+    model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
   },
   database: {
     path: process.env.DB_PATH ?? './data/news.db',
