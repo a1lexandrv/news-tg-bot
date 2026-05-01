@@ -17,10 +17,26 @@ export interface AppConfig {
   };
 }
 
-const parseNumber = (value: string | undefined, fallback: number): number => {
+const parseInteger = (
+  value: string | undefined,
+  fallback: number,
+  options: { min?: number; max?: number } = {},
+): number => {
   const parsed = Number(value);
 
-  return Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+
+  if (options.min !== undefined && parsed < options.min) {
+    return fallback;
+  }
+
+  if (options.max !== undefined && parsed > options.max) {
+    return fallback;
+  }
+
+  return parsed;
 };
 
 const parseAdminUserIds = (value: string | undefined): number[] => {
@@ -47,8 +63,8 @@ export default (): AppConfig => ({
     path: process.env.DB_PATH ?? './data/news.db',
   },
   news: {
-    minHypeScore: parseNumber(process.env.MIN_HYPE_SCORE, 6),
-    fetchIntervalMinutes: parseNumber(process.env.FETCH_INTERVAL_MINUTES, 180),
-    dailyLimit: parseNumber(process.env.NEWS_PER_DAY_LIMIT, 15),
+    minHypeScore: parseInteger(process.env.MIN_HYPE_SCORE, 6, { min: 0, max: 10 }),
+    fetchIntervalMinutes: parseInteger(process.env.FETCH_INTERVAL_MINUTES, 180, { min: 1 }),
+    dailyLimit: parseInteger(process.env.NEWS_PER_DAY_LIMIT, 15, { min: 1 }),
   },
 });

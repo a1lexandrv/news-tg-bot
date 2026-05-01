@@ -66,7 +66,7 @@ ai-news-bot/
 └── nest-cli.json
 ```
 
-На текущем этапе часть файлов структуры уже создана, сервисы будут добавляться поэтапно.
+На текущем этапе создан каркас проекта и реализован SQLite-слой. Остальные доменные сервисы будут добавляться поэтапно.
 
 ## Переменные окружения
 
@@ -89,6 +89,12 @@ ADMIN_USER_IDS=
 ```
 
 Файл `.env` не должен попадать в репозиторий. В проекте хранится только `.env.example`.
+
+Числовые настройки парсятся как целые числа с безопасными границами:
+
+- `MIN_HYPE_SCORE`: от `0` до `10`, по умолчанию `6`
+- `FETCH_INTERVAL_MINUTES`: от `1`, по умолчанию `180`
+- `NEWS_PER_DAY_LIMIT`: от `1`, по умолчанию `15`
 
 ## RSS-источники
 
@@ -164,7 +170,7 @@ CREATE TABLE news (
     url TEXT UNIQUE NOT NULL,
     category TEXT,
     published_at INTEGER,
-    hype_score INTEGER,
+    hype_score INTEGER CHECK (hype_score IS NULL OR (hype_score >= 0 AND hype_score <= 10)),
     is_posted BOOLEAN DEFAULT 0,
     posted_at INTEGER,
     created_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -172,19 +178,20 @@ CREATE TABLE news (
 
 CREATE TABLE feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    news_id INTEGER,
-    user_id INTEGER,
-    feedback_type TEXT,
+    news_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
     created_at INTEGER DEFAULT (strftime('%s', 'now')),
     FOREIGN KEY (news_id) REFERENCES news(id)
 );
 
-CREATE INDEX idx_url ON news(url);
+CREATE UNIQUE INDEX idx_url ON news(url);
 CREATE INDEX idx_posted ON news(is_posted, hype_score);
 CREATE INDEX idx_created ON news(created_at);
+CREATE UNIQUE INDEX idx_feedback_news_user ON feedback(news_id, user_id);
 ```
 
-`hype_score = NULL` означает, что новость ещё не проверена AI. `hype_score = 0` означает, что новость отклонена.
+`hype_score = NULL` означает, что новость ещё не проверена AI. `hype_score = 0` означает, что новость отклонена. Feedback идемпотентен: повторное нажатие пользователем обновляет его реакцию к новости, а не создаёт бесконечные дубли.
 
 ## Промпт AI-фильтрации
 
