@@ -12,6 +12,7 @@ import { TelegramModule } from './telegram/telegram.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: process.env.NODE_ENV === 'production' ? ['.env.production', '.env'] : ['.env'],
       load: [configuration],
     }),
     DatabaseModule,
