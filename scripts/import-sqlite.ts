@@ -161,27 +161,24 @@ async function main(): Promise<void> {
       );
     }
 
+    // Compare only the imported rows: the target may also hold news the bot collected after the first import,
+    // and the bot may already have scored or posted some of the imported ones.
     const [counts] = (await queryRunner.query(
       `SELECT
-         (SELECT COUNT(*) FROM news)::int AS total,
-         (SELECT COUNT(*) FROM news WHERE hype_score IS NULL)::int AS "pendingAi",
-         (SELECT COUNT(*) FROM news WHERE is_posted)::int AS posted,
-         (SELECT COUNT(*) FROM feedback)::int AS feedback`,
+         (SELECT COUNT(*) FROM news WHERE id = ANY($1::int[]))::int AS total,
+         (SELECT COUNT(*) FROM news WHERE id = ANY($1::int[]) AND hype_score IS NULL)::int AS "pendingAi",
+         (SELECT COUNT(*) FROM news WHERE id = ANY($1::int[]) AND is_posted)::int AS posted,
+         (SELECT COUNT(*) FROM feedback WHERE news_id = ANY($1::int[]))::int AS feedback`,
+      [newsRows.map((row) => row.id)],
     )) as TargetCounts[];
 
     console.log(`SQLite source: ${sqlitePath}`);
     console.log(`news inserted: ${toInsert.length} (already present: ${newsRows.length - toInsert.length})`);
     console.log(`feedback inserted: ${feedbackInserted} (orphans skipped: ${feedbackOrphans})`);
-    console.table({ sqlite: source, postgres: counts });
+    console.table({ sqlite: source, 'postgres (imported rows)': counts });
 
-    const matches =
-      counts.total === source.total &&
-      counts.pendingAi === source.pendingAi &&
-      counts.posted === source.posted &&
-      counts.feedback === source.feedback - feedbackOrphans;
-
-    if (!matches) {
-      throw new Error('Row counts in PostgreSQL do not match the SQLite source - rolling back.');
+    if (counts.total !== source.total) {
+      throw new Error('Not every SQLite news row is present in PostgreSQL - rolling back.');
     }
 
     if (dryRun) {
