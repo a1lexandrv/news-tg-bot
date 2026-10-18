@@ -2,7 +2,7 @@
 
 ## Цель
 
-Разработать MVP Telegram-бота, который автоматически собирает новости про AI и нейросети из RSS-источников, фильтрует их через OpenAI, сохраняет результаты в SQLite и публикует лучшие материалы в Telegram-канал.
+Разработать MVP Telegram-бота, который автоматически собирает новости про AI и нейросети из RSS-источников, фильтрует их через OpenAI, сохраняет результаты в PostgreSQL и публикует лучшие материалы в Telegram-канал.
 
 ## Актуальный стек
 
@@ -14,7 +14,8 @@
 | Конфигурация | @nestjs/config | 4.x |
 | Расписание | @nestjs/schedule | 6.x |
 | HTTP-клиент | @nestjs/axios | 4.x |
-| База данных | SQLite / better-sqlite3 | 12.x |
+| База данных | PostgreSQL | 16 (docker-compose) |
+| ORM и миграции | TypeORM / @nestjs/typeorm / pg | 1.x / 12.x / 8.x |
 | Telegram-бот | nestjs-telegraf / telegraf | 2.x / 4.x |
 | RSS | rss-parser | 3.x |
 | AI | OpenAI SDK | 6.x |
@@ -23,7 +24,8 @@
 
 - Используем свежий совместимый стек, а не версии из исходного черновика ТЗ.
 - `nestjs-telegraf` актуален в npm как `2.9.x`; версии `8.x` для этого пакета нет.
-- `better-sqlite3` используется в версии `12.x`, потому что она совместима с Node 22 и не требует ручной сборки в текущем окружении.
+- Работа с БД идёт через TypeORM поверх драйвера `pg`: схема описана entity-классами, изменения схемы — только через миграции (`synchronize: false`). Нативных модулей в зависимостях нет.
+- Разовый импорт из старой SQLite-базы читает файл встроенным `node:sqlite` (Node ≥ 22.13), отдельный пакет для этого не нужен.
 - TypeScript остаётся на `5.x`, так как это стабильная совместимая ветка для текущего набора NestJS/Telegraf-пакетов.
 
 ## Структура проекта
@@ -39,9 +41,17 @@ ai-news-bot/
 │   │   └── configuration.ts
 │   ├── database/
 │   │   ├── database.module.ts
-│   │   ├── database.service.ts
-│   │   └── entities/
-│   │       └── news.entity.ts
+│   │   ├── data-source.ts          # DataSource для TypeORM CLI
+│   │   ├── typeorm.options.ts      # общие опции для приложения и CLI
+│   │   ├── entities/
+│   │   │   ├── news.entity.ts
+│   │   │   ├── feedback.entity.ts
+│   │   │   └── app-state.entity.ts
+│   │   ├── repositories/
+│   │   │   ├── news.repository.ts
+│   │   │   ├── feedback.repository.ts
+│   │   │   └── app-state.repository.ts
+│   │   └── migrations/
 │   ├── news/
 │   │   ├── news.module.ts
 │   │   ├── news.service.ts
@@ -60,13 +70,16 @@ ai-news-bot/
 │   └── scheduler/
 │       ├── scheduler.module.ts
 │       └── scheduler.service.ts
+├── scripts/
+│   └── import-sqlite.ts            # разовый импорт из старой SQLite-базы
+├── docker-compose.yml
 ├── .env.example
 ├── package.json
 ├── tsconfig.json
 └── nest-cli.json
 ```
 
-На текущем этапе создан каркас проекта и реализован SQLite-слой. Остальные доменные сервисы будут добавляться поэтапно.
+Слой данных построен на PostgreSQL и TypeORM; доступ к таблицам идёт через репозитории (`NewsRepository`, `FeedbackRepository`, `AppStateRepository`), а не через общий сервис.
 
 ## Переменные окружения
 
@@ -79,13 +92,15 @@ CHANNEL_ID=@your_channel_name
 OPENAI_API_KEY=sk-proj-replace_with_api_key
 OPENAI_MODEL=gpt-4o-mini
 
-# Database
-DB_PATH=./data/news.db
+# Database (совпадает с docker-compose.yml)
+DATABASE_URL=postgres://ainews:ainews@localhost:5432/ainews
+DB_SSL=false
 
 # Runtime settings
 MIN_HYPE_SCORE=6
 FETCH_INTERVAL_MINUTES=180
 NEWS_PER_DAY_LIMIT=15
+DAY_BOUNDARY_TIMEZONE=UTC
 ADMIN_USER_IDS=
 ```
 
@@ -98,6 +113,8 @@ ADMIN_USER_IDS=
 - `MIN_HYPE_SCORE`: от `0` до `10`, по умолчанию `6`
 - `FETCH_INTERVAL_MINUTES`: от `1`, по умолчанию `180`
 - `NEWS_PER_DAY_LIMIT`: от `1`, по умолчанию `15`
+- `DAY_BOUNDARY_TIMEZONE`: IANA-таймзона (например `Asia/Ho_Chi_Minh`), в которой начинается «сегодня» для дневного лимита; по умолчанию `UTC`, неверное значение заменяется на `UTC`
+- `DATABASE_URL`: строка подключения к PostgreSQL; `DB_SSL=true` включает TLS для управляемых баз (Neon, Supabase, Railway)
 
 ## RSS-источники
 
@@ -141,13 +158,13 @@ export const RSS_SOURCES = [
 | `/help` | Список команд | Все пользователи |
 | `/stats` | Статистика по базе и публикациям | Только `ADMIN_USER_IDS` |
 
-Команды реализуются через `nestjs-telegraf` decorators. `/latest` отдаёт последние 5 AI-одобренных новостей из SQLite, `/stats` проверяет Telegram user id по `ADMIN_USER_IDS`.
+Команды реализуются через `nestjs-telegraf` decorators. `/latest` отдаёт последние 5 AI-одобренных новостей из PostgreSQL, `/stats` проверяет Telegram user id по `ADMIN_USER_IDS`.
 
 ## Основной цикл
 
-1. `SchedulerService` проверяет расписание раз в минуту и запускает цикл, когда прошёл `FETCH_INTERVAL_MINUTES`.
+1. `SchedulerService` проверяет расписание раз в минуту и запускает цикл, когда прошёл `FETCH_INTERVAL_MINUTES`. Время последнего запуска хранится в таблице `app_state` (`scheduler.last_run_at`), поэтому перезапуск или редеплой не сдвигает следующий цикл.
 2. RSS-парсер обходит все источники и нормализует элементы.
-3. Новые URL сохраняются в SQLite, дубли игнорируются на уровне уникального индекса.
+3. Новые URL сохраняются в PostgreSQL, дубли игнорируются на уровне уникального ограничения (`INSERT ... ON CONFLICT DO NOTHING`).
 4. Непроверенные новости последовательно отправляются в OpenAI через `AiService`.
 5. AI возвращает structured JSON с `hypeScore`, `newTitle`, `summary`.
 6. Новости с `hypeScore >= MIN_HYPE_SCORE` считаются одобренными.
@@ -181,38 +198,59 @@ Callback data имеет формат `feedback:{like|dislike}:{newsId}`. Пов
 
 ## Схема базы данных
 
+Источник истины — entity-классы в `src/database/entities/` и миграции в `src/database/migrations/`. Ниже эквивалентный DDL PostgreSQL:
+
 ```sql
 CREATE TABLE news (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     original_title TEXT,
     summary TEXT,
     source TEXT NOT NULL,
-    url TEXT UNIQUE NOT NULL,
+    url TEXT NOT NULL,
     category TEXT,
-    published_at INTEGER,
-    hype_score INTEGER CHECK (hype_score IS NULL OR (hype_score >= 0 AND hype_score <= 10)),
-    is_posted BOOLEAN DEFAULT 0,
-    posted_at INTEGER,
-    created_at INTEGER DEFAULT (strftime('%s', 'now'))
+    published_at TIMESTAMPTZ,
+    hype_score SMALLINT,
+    is_posted BOOLEAN NOT NULL DEFAULT false,
+    posted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_news_url UNIQUE (url),
+    CONSTRAINT chk_news_hype_score CHECK (hype_score IS NULL OR (hype_score >= 0 AND hype_score <= 10))
 );
 
 CREATE TABLE feedback (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     news_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
-    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-    FOREIGN KEY (news_id) REFERENCES news(id)
+    user_id BIGINT NOT NULL,
+    feedback_type VARCHAR(16) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_feedback_news_user UNIQUE (news_id, user_id),
+    CONSTRAINT chk_feedback_type CHECK (feedback_type IN ('like', 'dislike')),
+    CONSTRAINT fk_feedback_news FOREIGN KEY (news_id) REFERENCES news(id) ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX idx_url ON news(url);
-CREATE INDEX idx_posted ON news(is_posted, hype_score);
-CREATE INDEX idx_created ON news(created_at);
-CREATE UNIQUE INDEX idx_feedback_news_user ON feedback(news_id, user_id);
+CREATE TABLE app_state (
+    key VARCHAR(128) PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_news_posted_hype ON news(is_posted, hype_score);
+CREATE INDEX idx_news_created_at ON news(created_at);
 ```
 
-`hype_score = NULL` означает, что новость ещё не проверена AI. `hype_score = 0` означает, что новость отклонена. Feedback идемпотентен: повторное нажатие пользователем обновляет его реакцию к новости, а не создаёт бесконечные дубли.
+`hype_score = NULL` означает, что новость ещё не проверена AI. `hype_score = 0` означает, что новость отклонена. Feedback идемпотентен: повторное нажатие пользователем обновляет его реакцию к новости (`INSERT ... ON CONFLICT DO UPDATE`), а не создаёт дубли. `user_id` хранится как `BIGINT`, потому что Telegram-идентификаторы выходят за диапазон int32. `app_state` — маленькая key-value таблица для состояния, которое должно переживать рестарты.
+
+### Миграции
+
+```bash
+docker compose up -d                                                # локальный PostgreSQL
+npm run migration:generate -- src/database/migrations/<ИмяМиграции> # сгенерировать по изменениям entity
+npm run migration:run                                               # применить вручную
+npm run migration:revert                                            # откатить последнюю
+```
+
+При старте приложение само применяет неприменённые миграции (`migrationsRun: true`). Одноразовый перенос данных из старой базы: `npm run import:sqlite -- [путь/к/news.db] [--dry-run]`.
 
 ## Промпт AI-фильтрации
 
@@ -248,7 +286,7 @@ CREATE UNIQUE INDEX idx_feedback_news_user ON feedback(news_id, user_id);
 | 5 | Парсинг минимум 5 RSS-источников возвращает новости |
 | 6 | GPT-фильтрация успешно получает и парсит JSON |
 | 7 | В канал уходят только новости с `hypeScore >= MIN_HYPE_SCORE` |
-| 8 | SQLite сохраняет все новые новости |
+| 8 | PostgreSQL сохраняет все новые новости, схема создаётся миграциями |
 | 9 | Дубли по URL не сохраняются и не публикуются повторно |
 | 10 | Под постом есть кнопки `👍` и `👎` |
 | 11 | Планировщик запускает цикл по `FETCH_INTERVAL_MINUTES` |
@@ -257,6 +295,7 @@ CREATE UNIQUE INDEX idx_feedback_news_user ON feedback(news_id, user_id);
 
 ## Проверки
 
+- `docker compose up -d` и `npm run migration:run` на пустой базе, затем `npm run migration:revert` и повторный `migration:run`
 - `npm run build`
 - `npm run typecheck`
 - `npm audit --audit-level=moderate`
