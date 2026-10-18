@@ -3,9 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 
 import { AppConfig } from '../config/configuration';
+import { AppStateRepository } from '../database/repositories/app-state.repository';
 import { NewsRepository } from '../database/repositories/news.repository';
 import { NewsService } from '../news/news.service';
 import { TelegramService } from '../telegram/telegram.service';
+
+const LAST_RUN_STATE_KEY = 'scheduler.last_run_at';
 
 export interface ScheduledCycleResult {
   fetched: number;
@@ -27,6 +30,7 @@ export class SchedulerService implements OnModuleInit {
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly newsService: NewsService,
     private readonly newsRepository: NewsRepository,
+    private readonly appStateRepository: AppStateRepository,
     private readonly telegramService: TelegramService,
   ) {
     this.fetchIntervalMs = this.configService.get('news.fetchIntervalMinutes', { infer: true }) * 60_000;
@@ -34,9 +38,23 @@ export class SchedulerService implements OnModuleInit {
     this.dailyLimit = this.configService.get('news.dailyLimit', { infer: true });
   }
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
+    // Restore the last run so restarts/redeploys do not postpone the next cycle by a full interval.
+    // With no stored value we start the clock now, so nothing is published right at startup.
+    const storedLastRun = await this.loadLastRunAtMs();
+
+    if (storedLastRun !== null) {
+      this.lastRunAtMs = storedLastRun;
+    } else {
+      await this.saveLastRunAtMs(this.lastRunAtMs);
+    }
+
     this.logger.log(
-      `Scheduler initialized: interval=${Math.round(this.fetchIntervalMs / 60_000)}m dailyLimit=${this.dailyLimit}`,
+      [
+        `Scheduler initialized: interval=${Math.round(this.fetchIntervalMs / 60_000)}m`,
+        `dailyLimit=${this.dailyLimit}`,
+        `lastRunAt=${new Date(this.lastRunAtMs).toISOString()}`,
+      ].join(' '),
     );
   }
 
@@ -59,6 +77,8 @@ export class SchedulerService implements OnModuleInit {
     this.lastRunAtMs = Date.now();
 
     try {
+      await this.saveLastRunAtMs(this.lastRunAtMs);
+
       this.logger.log('Scheduled news cycle started');
 
       const intakeResult = await this.newsService.collectAndFilterNews();
@@ -128,5 +148,23 @@ export class SchedulerService implements OnModuleInit {
 
   private shouldRunNow(): boolean {
     return Date.now() - this.lastRunAtMs >= this.fetchIntervalMs;
+  }
+
+  private async loadLastRunAtMs(): Promise<number | null> {
+    const stored = await this.appStateRepository.get(LAST_RUN_STATE_KEY);
+    const parsed = stored ? Date.parse(stored) : Number.NaN;
+
+    // A value from the future (clock change, bad data) must not block the scheduler.
+    return Number.isFinite(parsed) && parsed <= Date.now() ? parsed : null;
+  }
+
+  private async saveLastRunAtMs(timestampMs: number): Promise<void> {
+    try {
+      await this.appStateRepository.set(LAST_RUN_STATE_KEY, new Date(timestampMs).toISOString());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+
+      this.logger.warn(`Failed to persist scheduler state: ${message}`);
+    }
   }
 }
