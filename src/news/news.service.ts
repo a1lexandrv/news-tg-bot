@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { AiService } from '../ai/ai.service';
 import { AppConfig } from '../config/configuration';
-import { DatabaseService } from '../database/database.service';
+import { NewsRepository } from '../database/repositories/news.repository';
 import { RssParser, RssFetchError } from './parsers/rss.parser';
 
 export interface FetchAndStoreNewsResult {
@@ -36,7 +36,7 @@ export class NewsService {
 
   constructor(
     private readonly rssParser: RssParser,
-    private readonly databaseService: DatabaseService,
+    private readonly newsRepository: NewsRepository,
     private readonly aiService: AiService,
     private readonly configService: ConfigService<AppConfig, true>,
   ) {
@@ -47,7 +47,7 @@ export class NewsService {
     this.logger.log('Starting RSS news collection');
 
     const rssSummary = await this.rssParser.fetchAllSources();
-    const insertResult = this.databaseService.insertNewsBatch(rssSummary.items);
+    const insertResult = await this.newsRepository.insertNewsBatch(rssSummary.items);
 
     this.logger.log(
       [
@@ -90,7 +90,7 @@ export class NewsService {
       };
     }
 
-    const pendingNews = this.databaseService.findUnprocessedNews(limit);
+    const pendingNews = await this.newsRepository.findUnprocessedNews(limit);
 
     if (pendingNews.length === 0) {
       this.logger.log('No news pending AI filtering');
@@ -118,7 +118,7 @@ export class NewsService {
           content: this.buildAiContent(news),
         });
 
-        this.databaseService.updateAiResult(news.id, {
+        await this.newsRepository.updateAiResult(news.id, {
           title: aiResult.newTitle,
           summary: aiResult.summary,
           hypeScore: aiResult.hypeScore,

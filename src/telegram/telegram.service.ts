@@ -5,8 +5,8 @@ import { Markup, Telegraf } from 'telegraf';
 import { ExtraReplyMessage } from 'telegraf/typings/telegram-types';
 
 import { AppConfig } from '../config/configuration';
-import { DatabaseService } from '../database/database.service';
 import { NewsEntity } from '../database/entities/news.entity';
+import { NewsRepository } from '../database/repositories/news.repository';
 
 @Injectable()
 export class TelegramService {
@@ -17,7 +17,7 @@ export class TelegramService {
   constructor(
     @InjectBot() private readonly bot: Telegraf,
     private readonly configService: ConfigService<AppConfig, true>,
-    private readonly databaseService: DatabaseService,
+    private readonly newsRepository: NewsRepository,
   ) {
     this.channelId = this.configService.get('telegram.channelId', { infer: true });
 
@@ -40,7 +40,7 @@ export class TelegramService {
       ...this.buildFeedbackKeyboard(news.id),
     });
 
-    this.databaseService.markAsPosted(news.id);
+    await this.newsRepository.markAsPosted(news.id);
     this.logger.log(`Published news id=${news.id} to Telegram channel`);
   }
 
@@ -89,8 +89,8 @@ export class TelegramService {
     ].join('\n');
   }
 
-  buildStatsMessage(): string {
-    const stats = this.databaseService.getStats();
+  async buildStatsMessage(): Promise<string> {
+    const stats = await this.newsRepository.getStats();
 
     return [
       '<b>Статистика</b>',

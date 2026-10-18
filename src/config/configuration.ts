@@ -9,14 +9,18 @@ export interface AppConfig {
     model: string;
   };
   database: {
-    path: string;
+    url: string;
+    ssl: boolean;
   };
   news: {
     minHypeScore: number;
     fetchIntervalMinutes: number;
     dailyLimit: number;
+    timezone: string;
   };
 }
+
+export const DEFAULT_DATABASE_URL = 'postgres://ainews:ainews@localhost:5432/ainews';
 
 const parseInteger = (
   value: string | undefined,
@@ -38,6 +42,30 @@ const parseInteger = (
   }
 
   return parsed;
+};
+
+const parseBoolean = (value: string | undefined, fallback: boolean): boolean => {
+  if (value === undefined || value.trim() === '') {
+    return fallback;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+};
+
+const parseTimezone = (value: string | undefined, fallback: string): string => {
+  const candidate = value?.trim();
+
+  if (!candidate) {
+    return fallback;
+  }
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate });
+
+    return candidate;
+  } catch {
+    return fallback;
+  }
 };
 
 const parseAdminUserIds = (value: string | undefined): number[] => {
@@ -62,11 +90,13 @@ export default (): AppConfig => ({
     model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
   },
   database: {
-    path: process.env.DB_PATH ?? './data/news.db',
+    url: process.env.DATABASE_URL?.trim() || DEFAULT_DATABASE_URL,
+    ssl: parseBoolean(process.env.DB_SSL, false),
   },
   news: {
     minHypeScore: parseInteger(process.env.MIN_HYPE_SCORE, 6, { min: 0, max: 10 }),
     fetchIntervalMinutes: parseInteger(process.env.FETCH_INTERVAL_MINUTES, 180, { min: 1 }),
     dailyLimit: parseInteger(process.env.NEWS_PER_DAY_LIMIT, 15, { min: 1 }),
+    timezone: parseTimezone(process.env.DAY_BOUNDARY_TIMEZONE, 'UTC'),
   },
 });

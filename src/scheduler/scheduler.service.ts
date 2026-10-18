@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 
 import { AppConfig } from '../config/configuration';
-import { DatabaseService } from '../database/database.service';
+import { NewsRepository } from '../database/repositories/news.repository';
 import { NewsService } from '../news/news.service';
 import { TelegramService } from '../telegram/telegram.service';
 
@@ -26,7 +26,7 @@ export class SchedulerService implements OnModuleInit {
   constructor(
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly newsService: NewsService,
-    private readonly databaseService: DatabaseService,
+    private readonly newsRepository: NewsRepository,
     private readonly telegramService: TelegramService,
   ) {
     this.fetchIntervalMs = this.configService.get('news.fetchIntervalMinutes', { infer: true }) * 60_000;
@@ -103,7 +103,7 @@ export class SchedulerService implements OnModuleInit {
       return { published: 0, failed: 0 };
     }
 
-    const publishedToday = this.databaseService.countPublishedToday();
+    const publishedToday = await this.newsRepository.countPublishedToday();
     const remainingLimit = Math.max(this.dailyLimit - publishedToday, 0);
 
     if (remainingLimit === 0) {
@@ -111,7 +111,7 @@ export class SchedulerService implements OnModuleInit {
       return { published: 0, failed: 0 };
     }
 
-    const publishableNews = this.databaseService.findTopPublishableNews({
+    const publishableNews = await this.newsRepository.findTopPublishableNews({
       minHypeScore: this.minHypeScore,
       limit: remainingLimit,
     });

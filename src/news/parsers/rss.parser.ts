@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Parser = require('rss-parser');
 
-import { CreateNewsInput } from '../../database/database.service';
+import { CreateNewsInput } from '../../database/repositories/news.repository';
 import { RSS_SOURCES, RssSource } from './sources.config';
 
 export interface RssFetchResult {
@@ -128,18 +128,18 @@ export class RssParser {
       return null;
     }
 
-    // RSS content can be huge; keep enough context for AI filtering without bloating SQLite rows.
+    // RSS content can be huge; keep enough context for AI filtering without bloating database rows.
     return normalized.slice(0, 2_000);
   }
 
-  private parsePublishedAt(value: string | undefined): number | null {
+  private parsePublishedAt(value: string | undefined): Date | null {
     if (!value) {
       return null;
     }
 
     const timestamp = Date.parse(value);
 
-    return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : null;
+    return Number.isFinite(timestamp) ? new Date(timestamp) : null;
   }
 
   private normalizeUrl(value: string | undefined): string | null {

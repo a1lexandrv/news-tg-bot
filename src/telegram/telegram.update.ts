@@ -4,7 +4,8 @@ import { Action, Command, Ctx, Start, Update } from 'nestjs-telegraf';
 import { Context } from 'telegraf';
 
 import { AppConfig } from '../config/configuration';
-import { DatabaseService } from '../database/database.service';
+import { FeedbackRepository } from '../database/repositories/feedback.repository';
+import { NewsRepository } from '../database/repositories/news.repository';
 import { TelegramService } from './telegram.service';
 
 type FeedbackType = 'like' | 'dislike';
@@ -20,7 +21,8 @@ export class TelegramUpdate {
 
   constructor(
     private readonly telegramService: TelegramService,
-    private readonly databaseService: DatabaseService,
+    private readonly newsRepository: NewsRepository,
+    private readonly feedbackRepository: FeedbackRepository,
     private readonly configService: ConfigService<AppConfig, true>,
   ) {
     this.adminUserIds = this.configService.get('telegram.adminUserIds', { infer: true });
@@ -56,7 +58,7 @@ export class TelegramUpdate {
 
   @Command('latest')
   async onLatest(@Ctx() ctx: Context): Promise<void> {
-    const latestNews = this.databaseService.findLatestNews(5);
+    const latestNews = await this.newsRepository.findLatestNews(5);
 
     await ctx.replyWithHTML(this.telegramService.buildLatestNewsMessage(latestNews), {
       link_preview_options: {
@@ -74,7 +76,7 @@ export class TelegramUpdate {
       return;
     }
 
-    await ctx.replyWithHTML(this.telegramService.buildStatsMessage());
+    await ctx.replyWithHTML(await this.telegramService.buildStatsMessage());
   }
 
   @Action(/^feedback:(like|dislike):(\d+)$/)
@@ -89,7 +91,7 @@ export class TelegramUpdate {
     }
 
     try {
-      this.databaseService.saveFeedback({
+      await this.feedbackRepository.saveFeedback({
         newsId,
         userId,
         feedbackType,
