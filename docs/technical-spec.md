@@ -84,12 +84,12 @@ ai-news-bot/
 ## Переменные окружения
 
 ```env
-# Telegram
-BOT_TOKEN=0000000000:replace_with_bot_token
-CHANNEL_ID=@your_channel_name
+# Telegram: пусто = без публикации (polling не запускается)
+BOT_TOKEN=
+CHANNEL_ID=
 
-# OpenAI
-OPENAI_API_KEY=sk-proj-replace_with_api_key
+# OpenAI: пусто = AI-фильтрация пропускается
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 
 # Database (совпадает с docker-compose.yml)
